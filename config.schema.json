@@ -1,5 +1,5 @@
 {
-  "pluginAlias": "ExampleHomebridgePlugin",
+  "pluginAlias": "Yale Sync Keypad",
   "pluginType": "platform",
   "singular": true,
   "strictValidation": false,
@@ -10,7 +10,40 @@
         "title": "Name",
         "type": "string",
         "required": true,
-        "default": "Example Dynamic Platform"
+        "default": "Home Alarm System",
+        "description": "The name of the alarm system in HomeKit."
+      },
+      "username": {
+        "title": "Yale Account Username",
+        "type": "string",
+        "required": true,
+        "placeholder": "johnsmith@example.com",
+        "description": "The username for your Yale Sync Alarm account. It is recommended to create a new account for this plugin so that your details can't be stolen."
+      },
+      "password": {
+        "title": "Yale Account Password",
+        "type": "string",
+        "required": true,
+        "placeholder": "Password123",
+        "description": "The password for your Yale Sync Alarm account. It is recommended to create a new account for this plugin so that your details can't be stolen."
+      },
+      "backgroundRefresh": {
+        "title": "Background Refresh",
+        "type": "boolean",
+        "required": true,
+        "default": true,
+        "description": "Enable this option to allow the plugin to refresh the alarm state in the background. This will allow the alarm state to be updated in the Home app without opening the Home app."
+      },
+      "refreshInterval": {
+        "title": "Refresh Interval",
+        "type": "number",
+        "required": true,
+        "default": 10,
+        "description": "The interval in seconds that the plugin will check the alarm state. The minimum value is 5 seconds so that the API is not overloaded.",
+        "minimum": 5,
+        "condition": {
+            "functionBody": "return model.backgroundRefresh === true;"
+        }
       }
     }
   }
