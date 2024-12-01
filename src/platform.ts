@@ -1,13 +1,13 @@
 import type { API, Characteristic, DynamicPlatformPlugin, Logging, PlatformAccessory, PlatformConfig, Service } from 'homebridge';
 
-import { AlarmSystemPlatformAccessory, ExamplePlatformAccessory } from './platformAccessory.js';
+import { AlarmSystemPlatformAccessory } from './platformAccessory.js';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js';
 import { YaleConfigHandler } from './helpers/platformConfig.js';
 import { Yale } from 'yalesyncalarm';
 import { Logger, LogLevel } from 'yalesyncalarm/dist/Logger.js';
-import { wait } from './helpers/functions.js';
-import { PanelLoggerData } from './helpers/loggerData.js';
-import { KeypadContext } from './helpers/contexts.js';
+import { panelUUID, wait } from './helpers/functions.js';
+import { LoggerContext, KeypadContext } from './helpers/contexts.js';
+
 
 /**
  * HomebridgePlatform
@@ -17,13 +17,14 @@ import { KeypadContext } from './helpers/contexts.js';
 export class YaleSyncKeypadPlatform implements DynamicPlatformPlugin {
     public readonly Service: typeof Service;
     public readonly Characteristic: typeof Characteristic;
+	public readonly yaleSyncApi?: Yale;
     public lastApiCall: Date | null = null;
-	private readonly yaleSyncApi?: Yale;
-	private panelData = new PanelLoggerData(new Date(), '');
+	private panelData = new LoggerContext(new Date(), '');
 
     // this is used to track restored cached accessories
     public readonly accessories: Map<string, PlatformAccessory> = new Map();
     public readonly discoveredCacheUUIDs: string[] = [];
+
 
     constructor(
 		public readonly log: Logging,
@@ -32,8 +33,6 @@ export class YaleSyncKeypadPlatform implements DynamicPlatformPlugin {
     ) {
         this.Service = api.hap.Service;
         this.Characteristic = api.hap.Characteristic;
-
-        this.log.info('Finished initializing platform: ', PLATFORM_NAME);
 
         // Get the Yale Sync Config and check if it is valid
         const yaleConfig = YaleConfigHandler.decode(config);
@@ -62,10 +61,11 @@ export class YaleSyncKeypadPlatform implements DynamicPlatformPlugin {
         });
     }
 
+
     /**
-   * This function is invoked when homebridge restores cached accessories from disk at startup.
-   * It should be used to set up event handlers for characteristics and update respective values.
-   */
+     * This function is invoked when homebridge restores cached accessories from disk at startup.
+     * It should be used to set up event handlers for characteristics and update respective values.
+     */
     configureAccessory(accessory: PlatformAccessory) {
         this.log.info('Loading accessory from cache: ', accessory.displayName);
 
@@ -74,6 +74,12 @@ export class YaleSyncKeypadPlatform implements DynamicPlatformPlugin {
     }
 
 
+    /**
+     * The lifecycle method is used to fetch the panel state from the Yale Sync API at regular intervals and update the accessory state
+     * @param refresh True if the user wants to refresh the panel state in the background
+     * @param refreshInterval The number of seconds to wait before refreshing the panel state
+     * @returns Promise<void>
+     */
 	async lifecycle(refresh: boolean, refreshInterval: number) : Promise<void> {
 		if (!this.yaleSyncApi) {
 			this.log.error('Yale Sync API not initialized. Exiting lifecycle');
@@ -83,14 +89,31 @@ export class YaleSyncKeypadPlatform implements DynamicPlatformPlugin {
 		// Try outside of the loop to stop making calls if there is an error
 		try {
 			while (true) {
+                // TODO: Rather than fetching the panel state here, just store the panel accessory and fetch the state in the accessory using the methods.
 				const panelState = await this.yaleSyncApi.getPanelState();
+                const panel = await this.yaleSyncApi.panel();
+                if (!panel) {
+                    this.log.error('Yale Sync Panel not found. Exiting lifecycle');
+			        return;
+                }
+
+                // Get the accessory based on the panel identifier
+                const uuid = this.api.hap.uuid.generate(panelUUID(panel.identifier));
+                const accessory = this.accessories.get(uuid);
+                if (!accessory) {
+                    this.log.error('Accessory not found in cache. Exiting lifecycle');
+                    return;
+                }
+
+                this.log.info('Updating accessory:', accessory.displayName, ' with context: ', JSON.stringify(accessory.context));
+
 				const d = new Date();
                 this.lastApiCall = new Date(d);
 
 				// Check if the panel state has changed or it has been 10 minutes since the last log
 				if (panelState.toString() !== this.panelData.lastValue || d.getTime() - this.panelData.lastUpdated.getTime() > (1000 * 60 * 10)) {
 					this.log.info('Fetching Yale Sync Panel State: ', panelState);
-					this.panelData = new PanelLoggerData(d, panelState.toString());
+					this.panelData = new LoggerContext(d, panelState.toString());
 				}
 
                 // If the user does not want to refresh the panel state, then break out of the loop
@@ -111,31 +134,16 @@ export class YaleSyncKeypadPlatform implements DynamicPlatformPlugin {
 	}
 
 
-
     /**
-   * This is an example method showing how to register discovered accessories.
-   * Accessories must only be registered once, previously created accessories
-   * must not be registered again to prevent "duplicate UUID" errors.
-   */
+     * This is an example method showing how to register discovered accessories.
+     * Accessories must only be registered once, previously created accessories
+     * must not be registered again to prevent "duplicate UUID" errors.
+     */
     async discoverDevices() : Promise<void> {
         if (!this.yaleSyncApi) {
             this.log.error('Yale Sync API not initialized. Exiting discoverDevices');
             return;
         }
-
-        // EXAMPLE ONLY
-        // A real plugin you would discover accessories from the local network, cloud services
-        // or a user-defined array in the platform config.
-        const exampleDevices = [
-            {
-                exampleUniqueId: 'ABCD',
-                exampleDisplayName: 'Bedroom',
-            },
-            {
-                exampleUniqueId: 'EFGH',
-                exampleDisplayName: 'Kitchen',
-            },
-        ];
         
         
         // Search for the panel from the user's Yale Sync account
@@ -148,8 +156,10 @@ export class YaleSyncKeypadPlatform implements DynamicPlatformPlugin {
         }
         this.log.info('Panel found in Yale Sync account: ', panel.identifier);
 
+
         // genereate a unique id for the accessory based on the panel's identifier. This is usually the mac address
-        const uuid = this.api.hap.uuid.generate(`${PLUGIN_NAME}.${PLATFORM_NAME}.panel.${panel.identifier}`); 
+        const uuid = this.api.hap.uuid.generate(panelUUID(panel.identifier)); 
+
 
         // Check if the panel has already been registered
         const existingPanelAccessory = this.accessories.get(uuid);
@@ -164,60 +174,17 @@ export class YaleSyncKeypadPlatform implements DynamicPlatformPlugin {
             new AlarmSystemPlatformAccessory(this, panelAccessory);
             this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [panelAccessory]);
         }
-
         this.discoveredCacheUUIDs.push(uuid);
+        this.removeOldAccessories();
+    }
 
 
-
-
-        // loop over the discovered devices and register each one if it has not already been registered
-        for (const device of exampleDevices) {
-            // generate a unique id for the accessory this should be generated from
-            // something globally unique, but constant, for example, the device serial
-            // number or MAC address
-            const uuid = this.api.hap.uuid.generate(device.exampleUniqueId);
-
-            // see if an accessory with the same uuid has already been registered and restored from
-            // the cached devices we stored in the `configureAccessory` method above
-            const existingAccessory = this.accessories.get(uuid);
-
-            if (existingAccessory) {
-                // the accessory already exists
-                this.log.info('Restoring existing accessory from cache:', existingAccessory.displayName);
-
-                // if you need to update the accessory.context then you should run `api.updatePlatformAccessories`. e.g.:
-                // existingAccessory.context.device = device;
-                // this.api.updatePlatformAccessories([existingAccessory]);
-
-                // create the accessory handler for the restored accessory
-                // this is imported from `platformAccessory.ts`
-                new ExamplePlatformAccessory(this, existingAccessory);
-            } else {
-                // the accessory does not yet exist, so we need to create it
-                this.log.info('Adding new accessory:', device.exampleDisplayName);
-
-                // create a new accessory
-                const accessory = new this.api.platformAccessory(device.exampleDisplayName, uuid);
-
-                // store a copy of the device object in the `accessory.context`
-                // the `context` property can be used to store any data about the accessory you may need
-                accessory.context.device = device;
-
-                // create the accessory handler for the newly create accessory
-                // this is imported from `platformAccessory.ts`
-                new ExamplePlatformAccessory(this, accessory);
-
-                // link the accessory to your platform
-                this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
-            }
-
-            // push into discoveredCacheUUIDs
-            this.discoveredCacheUUIDs.push(uuid);
-        }
-
-        // you can also deal with accessories from the cache which are no longer present by removing them from Homebridge
-        // for example, if your plugin logs into a cloud account to retrieve a device list, and a user has previously removed a device
-        // from this cloud account, then this device will no longer be present in the device list but will still be in the Homebridge cache
+    /**
+     * Remove accessories which are no longer present in the discovered cache.
+     * This will remove accessories which have been manually removed from the Yale Sync account
+     */
+    private removeOldAccessories() {
+        // For each accessory in the cache, check if it is in the 'discovered cache'
         for (const [uuid, accessory] of this.accessories) {
             if (!this.discoveredCacheUUIDs.includes(uuid)) {
                 this.log.info('Removing existing accessory from cache:', accessory.displayName);

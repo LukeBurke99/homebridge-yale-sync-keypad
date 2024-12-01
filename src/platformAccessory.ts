@@ -5,6 +5,15 @@ import { KeypadContext } from './helpers/contexts.js';
 import { wait } from './helpers/functions.js';
 import { Panel } from 'yalesyncalarm/dist/Model.js';
 
+/**
+ * NOTES:
+ * 
+ * if you need to return an error to show the device as "Not Responding" in the Home app: 
+ * 		throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+ */
+
+
+
 
 /**
  * An instance of this class is created for each panel accessory your platform registers.
@@ -54,9 +63,9 @@ export class AlarmSystemPlatformAccessory {
 	private async getCurrentState(): Promise<void> {
 		this.platform.log.info('Getting current state of the alarm system');
 		
+		await wait(100); // wait so that the target state is updated before fetching the current state
 		const state = await this.getPanelStateFromYaleApi('current'); // make the api request to get the current state based on the Yale servers
-		const accessoryContext = this.accessory.context as KeypadContext;
-		this.platform.log.info('Got current state:', accessoryContext.state);
+		this.platform.log.info('Got current state:', this.accessory.context.state);
 
 		// Update the current state after fetching the value from the API
 		this.service.getCharacteristic(this.platform.Characteristic.SecuritySystemCurrentState)
@@ -70,11 +79,12 @@ export class AlarmSystemPlatformAccessory {
 		this.platform.log.info('Getting target state of the alarm system');
 		
 		const state = await this.getPanelStateFromYaleApi('target'); // make the api request to get the current state based on the Yale servers
-		const accessoryContext = this.accessory.context as KeypadContext;
-		this.platform.log.info('Got target state: ', accessoryContext.state);
+		this.platform.log.info('Got target state: ', this.accessory.context.state);
 
-		// Update the target state after fetching the value from the API
+		// Update the target state and the current state after fetching the value from the API
 		this.service.getCharacteristic(this.platform.Characteristic.SecuritySystemTargetState)
+			.updateValue(state);
+		this.service.getCharacteristic(this.platform.Characteristic.SecuritySystemCurrentState)
 			.updateValue(state);
 	}
 
@@ -89,9 +99,15 @@ export class AlarmSystemPlatformAccessory {
 
 		// Check if the time since the last API call is less than 1 second and If it is, return the cached value
 		if (!this.platform.lastApiCall || d.getTime() - this.platform.lastApiCall.getTime() > 1000) {
-			this.platform.lastApiCall = d;
-	
-			await wait(10000); // similates the time it takes to make an API call and set the this.accessory.context.state value
+			if (this.platform.yaleSyncApi) {
+				this.platform.lastApiCall = d;
+				this.platform.log.info('Fetching Panel State from Yale Sync API');
+				const yalePanelState = await this.platform.yaleSyncApi.getPanelState();
+				this.accessory.context.state = yalePanelState;
+			} else {
+				this.platform.log.error('Yale Sync API not initialized. Couldn\'t fetch from Yale Servers');
+				throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+			}
 		} else {
 			this.platform.log.warn('Using cached value for ', area);
 		}
@@ -110,10 +126,9 @@ export class AlarmSystemPlatformAccessory {
 
 		await wait(10000); // similates the time it takes to make an API call
 		
-		// Update the alarm system state 
-		const accessoryContext = this.accessory.context as KeypadContext;
-		this.platform.log.info('Panel Changed from: ', `${accessoryContext.state} to ${state}`);
-		accessoryContext.state = state;
+		// Update the alarm system state in the accessory context
+		this.platform.log.info('Panel Changed from: ', `${this.accessory.context.state} to ${state}`);
+		this.accessory.context.state = state;
 
 		// Update the target state after making API calls
 		this.service.getCharacteristic(this.platform.Characteristic.SecuritySystemCurrentState)
@@ -162,94 +177,3 @@ export class AlarmSystemPlatformAccessory {
 	//#endregion
 }
 
-
-export class ExamplePlatformAccessory {
-	private service: Service;
-
-	private exampleStates = {
-		On: false,
-		Brightness: 100,
-	};
-
-	constructor(
-		private readonly platform: YaleSyncKeypadPlatform,
-		private readonly accessory: PlatformAccessory,
-	) {
-		// set accessory information
-		this.accessory.getService(this.platform.Service.AccessoryInformation)!
-			.setCharacteristic(this.platform.Characteristic.Manufacturer, 'Default-Manufacturer')
-			.setCharacteristic(this.platform.Characteristic.Model, 'Default-Model')
-			.setCharacteristic(this.platform.Characteristic.SerialNumber, 'Default-Serial');
-
-		// get the LightBulb service if it exists, otherwise create a new LightBulb service
-		// you can create multiple services for each accessory
-		this.service = this.accessory.getService(this.platform.Service.Lightbulb) || this.accessory.addService(this.platform.Service.Lightbulb);
-
-		// set the service name, this is what is displayed as the default name on the Home app
-		// in this example we are using the name we stored in the `accessory.context` in the `discoverDevices` method.
-		this.service.setCharacteristic(this.platform.Characteristic.Name, accessory.context.device.exampleDisplayName);
-
-		// each service must implement at-minimum the "required characteristics" for the given service type
-		// see https://developers.homebridge.io/#/service/Lightbulb
-
-		// register handlers for the On/Off Characteristic
-		this.service.getCharacteristic(this.platform.Characteristic.On)
-			.onSet(this.setOn.bind(this)) // SET - bind to the `setOn` method below
-			.onGet(this.getOn.bind(this)); // GET - bind to the `getOn` method below
-
-		// register handlers for the Brightness Characteristic
-		this.service.getCharacteristic(this.platform.Characteristic.Brightness)
-			.onSet(this.setBrightness.bind(this)); // SET - bind to the `setBrightness` method below
-
-
-	}
-
-	/**
-	 * Handle "SET" requests from HomeKit
-	 * These are sent when the user changes the state of an accessory, for example, turning on a Light bulb.
-	 */
-	async setOn(value: CharacteristicValue) {
-		// implement your own code to turn your device on/off
-		this.exampleStates.On = value as boolean;
-
-		this.platform.log.debug('Set Characteristic On ->', value);
-	}
-
-	/**
-	 * Handle the "GET" requests from HomeKit
-	 * These are sent when HomeKit wants to know the current state of the accessory, for example, checking if a Light bulb is on.
-	 *
-	 * GET requests should return as fast as possible. A long delay here will result in
-	 * HomeKit being unresponsive and a bad user experience in general.
-	 *
-	 * If your device takes time to respond you should update the status of your device
-	 * asynchronously instead using the `updateCharacteristic` method instead.
-	 * In this case, you may decide not to implement `onGet` handlers, which may speed up
-	 * the responsiveness of your device in the Home app.
-  
-	 * @example
-	 * this.service.updateCharacteristic(this.platform.Characteristic.On, true)
-	 */
-	async getOn(): Promise<CharacteristicValue> {
-		// implement your own code to check if the device is on
-		const isOn = this.exampleStates.On;
-
-		this.platform.log.debug('Get Characteristic On ->', isOn);
-
-		// if you need to return an error to show the device as "Not Responding" in the Home app:
-		// throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-
-		return isOn;
-	}
-
-	/**
-	 * Handle "SET" requests from HomeKit
-	 * These are sent when the user changes the state of an accessory, for example, changing the Brightness
-	 */
-	async setBrightness(value: CharacteristicValue) {
-		// implement your own code to set the brightness
-		this.exampleStates.Brightness = value as number;
-
-		this.platform.log.debug('Set Characteristic Brightness -> ', value);
-	}
-}
