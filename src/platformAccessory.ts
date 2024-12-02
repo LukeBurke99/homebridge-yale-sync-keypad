@@ -1,4 +1,4 @@
-import type { CharacteristicValue, PlatformAccessory, Service } from 'homebridge';
+import { LogLevel, type CharacteristicValue, type PlatformAccessory, type Service } from 'homebridge';
 
 import type { YaleSyncKeypadPlatform } from './platform.js';
 import { KeypadContext } from './helpers/contexts.js';
@@ -23,7 +23,7 @@ export class AlarmSystemPlatformAccessory {
 	private service: Service;
 
 
-	constructor(private readonly platform: YaleSyncKeypadPlatform, private readonly accessory: PlatformAccessory) {
+	constructor(private readonly platform: YaleSyncKeypadPlatform, public readonly accessory: PlatformAccessory) {
 		const accessoryContext = accessory.context as KeypadContext;
 
 		// set accessory information
@@ -48,7 +48,7 @@ export class AlarmSystemPlatformAccessory {
 				return this.stateTranslateYaleToHAP(this.accessory.context.state);
 			});
 
-		// // add the event handler for setting the state of the alarm system
+		// add the event handler for setting the state of the alarm system
 		this.service.getCharacteristic(this.platform.Characteristic.SecuritySystemTargetState)
 			.onSet((value: CharacteristicValue) => {
 				this.setTargetState(value);
@@ -64,8 +64,9 @@ export class AlarmSystemPlatformAccessory {
 		this.platform.log.info('Getting current state of the alarm system');
 		
 		await wait(100); // wait so that the target state is updated before fetching the current state
-		const state = await this.getPanelStateFromYaleApi('current'); // make the api request to get the current state based on the Yale servers
-		this.platform.log.info('Got current state:', this.accessory.context.state);
+		const cachedValue = { c: false };
+		const state = await this.getPanelStateFromYaleApi(cachedValue); // make the api request to get the current state based on the Yale servers
+		this.platform.log.info(`${cachedValue.c ? 'CACHED - ' : ''}Got current state: ${this.accessory.context.state}`);
 
 		// Update the current state after fetching the value from the API
 		this.service.getCharacteristic(this.platform.Characteristic.SecuritySystemCurrentState)
@@ -74,12 +75,14 @@ export class AlarmSystemPlatformAccessory {
 
 	/**
 	 * Get the target state of the alarm system by fetching the state from the Yale Sync API
+	 * @param showLogs Whether to show logs or not. Default is true. - The logs are disabled for the lifecycle (as long as it hasn't been more than 10 minutes)
 	 */
-	private async getTargetState(): Promise<void> {
-		this.platform.log.info('Getting target state of the alarm system');
+	public async getTargetState(showLogs: boolean = true): Promise<void> {
+		this.platform.log.log(showLogs ? LogLevel.INFO : LogLevel.DEBUG, 'Getting target state of the alarm system');
 		
-		const state = await this.getPanelStateFromYaleApi('target'); // make the api request to get the current state based on the Yale servers
-		this.platform.log.info('Got target state: ', this.accessory.context.state);
+		const cachedValue = { c: false };
+		const state = await this.getPanelStateFromYaleApi(cachedValue); // make the api request to get the current state based on the Yale servers
+		this.platform.log.log(showLogs ? LogLevel.INFO : LogLevel.DEBUG, `${cachedValue.c ? 'CACHED - ' : ''}Got target state: ${this.accessory.context.state}`);
 
 		// Update the target state and the current state after fetching the value from the API
 		this.service.getCharacteristic(this.platform.Characteristic.SecuritySystemTargetState)
@@ -92,16 +95,19 @@ export class AlarmSystemPlatformAccessory {
 	 * Use the same function for getting the current state and the target state of the alarm system
 	 * Get the current state of the panel by sending a request to the Yale Sync API.
 	 * Return it so that we can update the cached value in the accessory context
+	 * @param cachedValue An object to store whether the value was fetched from the api or from the cache
 	 * @returns The state of the alarm system
 	 */
-	private async getPanelStateFromYaleApi(area: string): Promise<CharacteristicValue> {
+	private async getPanelStateFromYaleApi(cachedValue: { c: boolean }): Promise<CharacteristicValue> {
 		const d = new Date();
 
 		// Check if the time since the last API call is less than 1 second and If it is, return the cached value
 		if (!this.platform.lastApiCall || d.getTime() - this.platform.lastApiCall.getTime() > 1000) {
 			if (this.platform.yaleSyncApi) {
+				this.platform.log.debug('Fetching Panel State from Yale Sync API');
+
+				// update the last API fetch time and then fetch the panel state from the Yale Sync API
 				this.platform.lastApiCall = d;
-				this.platform.log.info('Fetching Panel State from Yale Sync API');
 				const yalePanelState = await this.platform.yaleSyncApi.getPanelState();
 				this.accessory.context.state = yalePanelState;
 			} else {
@@ -109,7 +115,7 @@ export class AlarmSystemPlatformAccessory {
 				throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
 			}
 		} else {
-			this.platform.log.warn('Using cached value for ', area);
+			cachedValue.c = true;
 		}
 		
 		return this.stateTranslateYaleToHAP(this.accessory.context.state);

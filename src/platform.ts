@@ -22,6 +22,7 @@ export class YaleSyncKeypadPlatform implements DynamicPlatformPlugin {
 	private panelData = new LoggerContext(new Date(), '');
 
     // this is used to track restored cached accessories
+    private panel: AlarmSystemPlatformAccessory | null = null;
     public readonly accessories: Map<string, PlatformAccessory> = new Map();
     public readonly discoveredCacheUUIDs: string[] = [];
 
@@ -85,48 +86,47 @@ export class YaleSyncKeypadPlatform implements DynamicPlatformPlugin {
 			this.log.error('Yale Sync API not initialized. Exiting lifecycle');
 			return;
 		}
-		
+
 		// Try outside of the loop to stop making calls if there is an error
 		try {
 			while (true) {
-                // TODO: Rather than fetching the panel state here, just store the panel accessory and fetch the state in the accessory using the methods.
-				const panelState = await this.yaleSyncApi.getPanelState();
-                const panel = await this.yaleSyncApi.panel();
-                if (!panel) {
-                    this.log.error('Yale Sync Panel not found. Exiting lifecycle');
-			        return;
+                // Check if the panel accessory has been set and use that to fetch the panel state.
+                // If it hasn't, skip this lifecycle
+                if (this.panel) {
+                    const d = new Date();
+
+                    // work out whether we need to show the logs to the user by checking if it has been more than 10 minutes since the last log
+                    // if that panel state as changed, the logs will automatically show
+                    const currentPanelState: string = this.panel.accessory.context.state;
+                    const showLogs = d.getTime() - this.panelData.lastUpdated.getTime() > (1000 * 60 * 10);
+                    // this.log.info(`Time Now: ${d.getTime()} | Last Updated: ${this.panelData.lastUpdated.getTime()} | Difference: ${d.getTime() - this.panelData.lastUpdated.getTime()} | Show Logs: ${showLogs}`);
+                    if (showLogs) {
+                        this.log.info('Lifecycle logs are enabled. Fetching panel state');
+                    }
+                    await this.panel.getTargetState(showLogs);
+                    const stateHasChanged = currentPanelState !== this.panel.accessory.context.state;
+
+                    // if we have just shown the logs or the state has changed, then update the panel data so that the next time this cycle runs
+                    // it will not log until 10 minutes have passed OR the state changes again
+                    if (showLogs || stateHasChanged) {
+                        if (!showLogs && stateHasChanged) {
+                            this.log.info('Panel state has changed: ', this.panel.accessory.context.state);
+                        }
+                        this.panelData = new LoggerContext(d, this.panel.accessory.context.state);
+                    }
+                } else {
+                    this.log.warn('Panel accessory not set. Skipping this cycle.');
                 }
-
-                // Get the accessory based on the panel identifier
-                const uuid = this.api.hap.uuid.generate(panelUUID(panel.identifier));
-                const accessory = this.accessories.get(uuid);
-                if (!accessory) {
-                    this.log.error('Accessory not found in cache. Exiting lifecycle');
-                    return;
-                }
-
-                this.log.info('Updating accessory:', accessory.displayName, ' with context: ', JSON.stringify(accessory.context));
-
-				const d = new Date();
-                this.lastApiCall = new Date(d);
-
-				// Check if the panel state has changed or it has been 10 minutes since the last log
-				if (panelState.toString() !== this.panelData.lastValue || d.getTime() - this.panelData.lastUpdated.getTime() > (1000 * 60 * 10)) {
-					this.log.info('Fetching Yale Sync Panel State: ', panelState);
-					this.panelData = new LoggerContext(d, panelState.toString());
-				}
 
                 // If the user does not want to refresh the panel state, then break out of the loop
                 if (!refresh) {
                     this.log.warn('Background refresh is disabled. Exiting lifecycle');
                     return;
                 }
-				
-				await wait(refreshInterval * 1000);
+
+                await wait(refreshInterval * 1000); // delay the cycle for the number of seconds provided in the config
 			}
 		} catch (error) {
-			this.log.error('Error fetching Yale Sync Panel State');
-			this.log.error('Error fetching Yale Sync Panel State');
 			this.log.error('Error fetching Yale Sync Panel State');
 			this.log.error('Error fetching Yale Sync Panel State');
 			this.log.error('Error fetching Yale Sync Panel State: ', error);
@@ -165,14 +165,16 @@ export class YaleSyncKeypadPlatform implements DynamicPlatformPlugin {
         const existingPanelAccessory = this.accessories.get(uuid);
         if (existingPanelAccessory) {
             this.log.info('Restoring existing panel accessory from cache:', existingPanelAccessory.displayName);
-            new AlarmSystemPlatformAccessory(this, existingPanelAccessory);
+            this.panel = new AlarmSystemPlatformAccessory(this, existingPanelAccessory);
         } else {
             // Create the panel accessory and register it
             this.log.info('Adding new panel accessory:', panel.identifier);
             const panelAccessory = new this.api.platformAccessory(this.config.name!, uuid, this.api.hap.Categories.SECURITY_SYSTEM);
             panelAccessory.context = new KeypadContext(panel.identifier, 'panel', panel.state);
-            new AlarmSystemPlatformAccessory(this, panelAccessory);
+            this.panel = new AlarmSystemPlatformAccessory(this, panelAccessory);
             this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [panelAccessory]);
+            this.log.info('Panel accessory added to cache: ', panelAccessory.displayName);
+            this.accessories.set(panelAccessory.UUID, panelAccessory);
         }
         this.discoveredCacheUUIDs.push(uuid);
         this.removeOldAccessories();
