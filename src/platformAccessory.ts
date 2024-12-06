@@ -2,7 +2,7 @@ import { LogLevel, type CharacteristicValue, type PlatformAccessory, type Servic
 
 import type { YaleSyncKeypadPlatform } from './platform.js';
 import { KeypadContext } from './helpers/contexts.js';
-import { wait } from './helpers/functions.js';
+import { checkNetwork, wait } from './helpers/functions.js';
 import { Panel } from 'yalesyncalarm/dist/Model.js';
 
 /**
@@ -78,7 +78,7 @@ export class AlarmSystemPlatformAccessory {
 	 * @param showLogs Whether to show logs or not. Default is true. - The logs are disabled for the lifecycle (as long as it hasn't been more than 10 minutes)
 	 */
 	public async getTargetState(showLogs: boolean = true): Promise<void> {
-		this.platform.log.log(showLogs ? LogLevel.INFO : LogLevel.DEBUG, 'Getting target state of the alarm system');
+		this.platform.log.log(LogLevel.DEBUG, 'Getting target state of the alarm system');
 		
 		const cachedValue = { c: false };
 		const state = await this.getPanelStateFromYaleApi(cachedValue); // make the api request to get the current state based on the Yale servers
@@ -101,6 +101,13 @@ export class AlarmSystemPlatformAccessory {
 	private async getPanelStateFromYaleApi(cachedValue: { c: boolean }): Promise<CharacteristicValue> {
 		const d = new Date();
 
+		const connected = await checkNetwork();
+
+		if (!connected) {
+			this.platform.log.error('Not connected to the internet.');
+			throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+		}
+
 		// Check if the time since the last API call is less than 1 second and If it is, return the cached value
 		if (!this.platform.lastApiCall || d.getTime() - this.platform.lastApiCall.getTime() > 1000) {
 			if (this.platform.yaleSyncApi) {
@@ -108,8 +115,17 @@ export class AlarmSystemPlatformAccessory {
 
 				// update the last API fetch time and then fetch the panel state from the Yale Sync API
 				this.platform.lastApiCall = d;
-				const yalePanelState = await this.platform.yaleSyncApi.getPanelState();
-				this.accessory.context.state = yalePanelState;
+				let yalePanelState: Panel.State | undefined;
+				try {
+					yalePanelState = await this.platform.yaleSyncApi.getPanelState();
+					if ([Panel.State.Armed, Panel.State.Disarmed, Panel.State.Home].includes(yalePanelState)) {
+						this.accessory.context.state = yalePanelState;
+					} else {
+						throw new Error('Unknown Panel State');
+					}
+				} catch (error) {
+					this.platform.log.error('Error fetching panel state. Response is: ', yalePanelState, ' with error: ', error);
+				}
 			} else {
 				this.platform.log.error('Yale Sync API not initialized. Couldn\'t fetch from Yale Servers');
 				throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
@@ -130,7 +146,17 @@ export class AlarmSystemPlatformAccessory {
 		const state = this.stateTranslateHAPToYale(value);
 		this.platform.log.info('Setting Panel to: ', `${state} (${value})`);
 
-		await wait(10000); // similates the time it takes to make an API call
+		this.platform.log.info('Changing Panel from: ', `${this.accessory.context.state} to ${state}`);
+		try {
+			if (this.platform.yaleSyncApi) {
+				await this.platform.yaleSyncApi.setPanelState(state);
+			} else {
+				throw new Error('Yale Sync Api not initialized');
+			}
+		} catch (error) {
+			this.platform.log.error('Error changing panel state: ', error);
+			throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
+		}
 		
 		// Update the alarm system state in the accessory context
 		this.platform.log.info('Panel Changed from: ', `${this.accessory.context.state} to ${state}`);
@@ -157,6 +183,9 @@ export class AlarmSystemPlatformAccessory {
 				return this.platform.Characteristic.SecuritySystemCurrentState.NIGHT_ARM;
 			case Panel.State.Disarmed:
 				return this.platform.Characteristic.SecuritySystemCurrentState.DISARMED;
+			default:
+				this.platform.log.error('Unknown Yale State: ', state);
+				throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
 		}
 	}
 

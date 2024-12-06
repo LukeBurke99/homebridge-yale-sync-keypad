@@ -5,7 +5,7 @@ import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js';
 import { YaleConfigHandler } from './helpers/platformConfig.js';
 import { Yale } from 'yalesyncalarm';
 import { Logger, LogLevel } from 'yalesyncalarm/dist/Logger.js';
-import { panelUUID, wait } from './helpers/functions.js';
+import { checkNetwork, checkNetworkResponse, panelUUID, wait } from './helpers/functions.js';
 import { LoggerContext, KeypadContext } from './helpers/contexts.js';
 
 
@@ -76,65 +76,6 @@ export class YaleSyncKeypadPlatform implements DynamicPlatformPlugin {
 
 
     /**
-     * The lifecycle method is used to fetch the panel state from the Yale Sync API at regular intervals and update the accessory state
-     * @param refresh True if the user wants to refresh the panel state in the background
-     * @param refreshInterval The number of seconds to wait before refreshing the panel state
-     * @returns Promise<void>
-     */
-	async lifecycle(refresh: boolean, refreshInterval: number) : Promise<void> {
-		if (!this.yaleSyncApi) {
-			this.log.error('Yale Sync API not initialized. Exiting lifecycle');
-			return;
-		}
-
-		// Try outside of the loop to stop making calls if there is an error
-		try {
-			while (true) {
-                // Check if the panel accessory has been set and use that to fetch the panel state.
-                // If it hasn't, skip this lifecycle
-                if (this.panel) {
-                    const d = new Date();
-
-                    // work out whether we need to show the logs to the user by checking if it has been more than 10 minutes since the last log
-                    // if that panel state as changed, the logs will automatically show
-                    const currentPanelState: string = this.panel.accessory.context.state;
-                    const showLogs = d.getTime() - this.panelData.lastUpdated.getTime() > (1000 * 60 * 10);
-                    // this.log.info(`Time Now: ${d.getTime()} | Last Updated: ${this.panelData.lastUpdated.getTime()} | Difference: ${d.getTime() - this.panelData.lastUpdated.getTime()} | Show Logs: ${showLogs}`);
-                    if (showLogs) {
-                        this.log.info('Lifecycle logs are enabled. Fetching panel state');
-                    }
-                    await this.panel.getTargetState(showLogs);
-                    const stateHasChanged = currentPanelState !== this.panel.accessory.context.state;
-
-                    // if we have just shown the logs or the state has changed, then update the panel data so that the next time this cycle runs
-                    // it will not log until 10 minutes have passed OR the state changes again
-                    if (showLogs || stateHasChanged) {
-                        if (!showLogs && stateHasChanged) {
-                            this.log.info('Panel state has changed: ', this.panel.accessory.context.state);
-                        }
-                        this.panelData = new LoggerContext(d, this.panel.accessory.context.state);
-                    }
-                } else {
-                    this.log.warn('Panel accessory not set. Skipping this cycle.');
-                }
-
-                // If the user does not want to refresh the panel state, then break out of the loop
-                if (!refresh) {
-                    this.log.warn('Background refresh is disabled. Exiting lifecycle');
-                    return;
-                }
-
-                await wait(refreshInterval * 1000); // delay the cycle for the number of seconds provided in the config
-			}
-		} catch (error) {
-			this.log.error('Error fetching Yale Sync Panel State');
-			this.log.error('Error fetching Yale Sync Panel State');
-			this.log.error('Error fetching Yale Sync Panel State: ', error);
-		}
-	}
-
-
-    /**
      * This is an example method showing how to register discovered accessories.
      * Accessories must only be registered once, previously created accessories
      * must not be registered again to prevent "duplicate UUID" errors.
@@ -147,7 +88,17 @@ export class YaleSyncKeypadPlatform implements DynamicPlatformPlugin {
         
         
         // Search for the panel from the user's Yale Sync account
-        this.log.info('Fetching Yale Sync Panel from your account');
+        this.log.info('Fetching \'Yale Sync Alarm Panel\' from your account');
+
+        // Check if homebridge is connected to the internet
+        const err = await checkNetworkResponse();
+        this.log.info('First Check: ', JSON.stringify(err));
+        const connected = await checkNetwork();
+        if (!connected) {
+            this.log.error('Error: Unable to reach Yale servers.');
+            return;
+        }
+
         await this.yaleSyncApi.getPanelState(); // Call this first to initially set the yale.panel property
         const panel = await this.yaleSyncApi.panel();
         if (!panel) {
@@ -194,7 +145,64 @@ export class YaleSyncKeypadPlatform implements DynamicPlatformPlugin {
             }
         }
     }
+
+
+    /**
+     * The lifecycle method is used to fetch the panel state from the Yale Sync API at regular intervals and update the accessory state
+     * @param refresh True if the user wants to refresh the panel state in the background
+     * @param refreshInterval The number of seconds to wait before refreshing the panel state
+     * @returns Promise<void>
+     */
+	async lifecycle(refresh: boolean, refreshInterval: number) : Promise<void> {
+		if (!this.yaleSyncApi) {
+			this.log.error('Yale Sync API not initialized. Exiting lifecycle');
+			return;
+		}
+
+		// Try outside of the loop to stop making calls if there is an error
+		try {
+			while (true) {
+                // Check if the panel accessory has been set and use that to fetch the panel state.
+                // If it hasn't, skip this lifecycle
+                if (this.panel) {
+                    const d = new Date();
+
+                    // work out whether we need to show the logs to the user by checking if it has been more than 10 minutes since the last log
+                    // if that panel state as changed, the logs will automatically show
+                    const currentPanelState: string = this.panel.accessory.context.state;
+                    const showLogs = d.getTime() - this.panelData.lastUpdated.getTime() > (1000 * 60 * 10);
+                    // this.log.info(`Time Now: ${d.getTime()} | Last Updated: ${this.panelData.lastUpdated.getTime()} | Difference: ${d.getTime() - this.panelData.lastUpdated.getTime()} | Show Logs: ${showLogs}`);
+                    if (showLogs) {
+                        this.log.debug('Lifecycle logs are enabled. Fetching panel state');
+                    }
+                    await this.panel.getTargetState(showLogs);
+                    const stateHasChanged = currentPanelState !== this.panel.accessory.context.state;
+
+                    // if we have just shown the logs or the state has changed, then update the panel data so that the next time this cycle runs
+                    // it will not log until 10 minutes have passed OR the state changes again
+                    if (showLogs || stateHasChanged) {
+                        if (!showLogs && stateHasChanged) {
+                            this.log.info('Panel state has changed: ', this.panel.accessory.context.state);
+                        }
+                        this.panelData = new LoggerContext(d, this.panel.accessory.context.state);
+                    }
+                } else {
+                    this.log.warn('Panel accessory not set. Exiting lifecyle');
+                    return;
+                }
+
+                // If the user does not want to refresh the panel state, then break out of the loop
+                if (!refresh) {
+                    this.log.warn('Background refresh is disabled. Exiting lifecycle');
+                    return;
+                }
+
+                await wait(refreshInterval * 1000); // delay the cycle for the number of seconds provided in the config
+			}
+		} catch (error) {
+			this.log.error('Error fetching Yale Sync Panel State');
+			this.log.error('Error fetching Yale Sync Panel State');
+			this.log.error('Error fetching Yale Sync Panel State: ', error);
+		}
+	}
 }
-
-
-
