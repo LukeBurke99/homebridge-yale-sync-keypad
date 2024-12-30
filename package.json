@@ -3,9 +3,9 @@
   "displayName": "Yale Sync Alarm Keypad",
   "type": "module",
   "version": "1.0.0",
-  "private": true,
+  "private": false,
   "description": "A pluign to connect to your Yale Sync Alarm account and allow you to change the alarm state using Homekit. Motion sensors are not supported, due to the fact that they are only active when the alarm is set to away.",
-  "author": "Luke",
+  "author": "LukeBurke99",
   "license": "Apache-2.0",
   "homepage": "https://github.com/LukeBurke99/homebridge-yale-sync-keypad#readme",
   "repository": {
@@ -16,7 +16,10 @@
     "url": "https://github.com/LukeBurke99/homebridge-yale-sync-keypad/issues"
   },
   "keywords": [
-    "homebridge-plugin"
+    "homebridge", 
+    "homebridge-plugin",
+    "yale",
+		"alarm"
   ],
   "main": "dist/index.js",
   "engines": {
