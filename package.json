@@ -10,16 +10,16 @@
   "homepage": "https://github.com/LukeBurke99/homebridge-yale-sync-keypad#readme",
   "repository": {
     "type": "git",
-    "url": "https://github.com/LukeBurke99/homebridge-yale-sync-keypad.git"
+    "url": "git+https://github.com/LukeBurke99/homebridge-yale-sync-keypad.git"
   },
   "bugs": {
     "url": "https://github.com/LukeBurke99/homebridge-yale-sync-keypad/issues"
   },
   "keywords": [
-    "homebridge", 
+    "homebridge",
     "homebridge-plugin",
     "yale",
-		"alarm"
+    "alarm"
   ],
   "main": "dist/index.js",
   "engines": {
