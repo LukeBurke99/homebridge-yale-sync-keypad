@@ -35,6 +35,22 @@ A webhook integration would allow the Yale Server to send a message to your Home
 - `Background Refresh` - If checked, this will enable the *polling service* and will start fetching the status of your Alarm at constant intervals. Disabling this option will mean that the status of your Yale Alarm will only ever be updated on Homebridge whenever the accessory is selected.
 - `Refresh Interval` - The interval in seconds that the plugin will check the alarm state. The minimum value is 5 seconds so that the API is not overloaded. The higher the number, the less requests to the Yale API will be made, however, this means that your Homebridge accessory will be out of sync for longer.
 
+## Integration Testing
+
+This repository includes Vitest integration test scaffolding for Yale GET methods (`getPanelState`, `panel`, `motionSensors`, and `contactSensors`).
+
+1. Create a local credentials file named `.env.test.local` in the repository root.
+2. Copy values from `.env.test.example` and set:
+	- `YALE_USERNAME`
+	- `YALE_PASSWORD`
+3. Run:
+
+```bash
+npm run test:integration
+```
+
+If credentials are not set, the prerequisites test fails with setup guidance and live API tests are skipped.
+
 # Bugs
 
 This plugin is in active development and will still have a few bugs. Please let me know of any in the Issues tab on this plugin's GitHub page.
